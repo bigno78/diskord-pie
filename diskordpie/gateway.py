@@ -71,12 +71,17 @@ class Gateway:
             "User-Agent": "DiscordBot (diskordos 0.0.1)"
         }
 
+        params = {
+            "v": 9,
+            "encoding": "json"
+        }
+
         # the number of retries in case of rate limiting after which
         # we give up and assume we are banned
         retries = 3
 
         for _ in range(retries):
-            async with self._session.get(Gateway.GET_GATEWAY_URL, headers=headers) as r:
+            async with self._session.get(Gateway.GET_GATEWAY_URL, headers=headers, params=params) as r:
                 data = await r.json()
 
                 # the request was ok
