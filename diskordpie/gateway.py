@@ -120,7 +120,21 @@ class Gateway:
         await self._ws.send_json(data)
 
     async def close(self):
-        pass
+        self._heartbeat_task.cancel()
+        
+        # wait for the task to be cancelled
+        try:
+            await self._heartbeat_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            print("Error when cancelling heartbeat task.")
+
+        # close the websocket
+        await self._ws.close()
+
+        # close the session object
+        await self._session.close()
 
     async def _heartbeater(self, interval):
         seconds = interval/1000
