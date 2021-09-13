@@ -1,7 +1,5 @@
-import requests
 import aiohttp
 import asyncio
-import json
 import sys
 
 
