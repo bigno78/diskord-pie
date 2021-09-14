@@ -34,7 +34,7 @@ class Gateway:
             self._ws = await self._session.ws_connect(gateway_url)
 
             # receive hello message
-            hello_msg = await self.receive()
+            hello_msg = await self._receive()
             if not hello_msg["op"] == self.HELLO:
                 raise RuntimeError("First msg received was not HELLO.")
             interval = hello_msg["d"]["heartbeat_interval"]
@@ -97,6 +97,23 @@ class Gateway:
                 raise RuntimeError(f"Request for gateway URL failed with code {r.status} - {r.reason}")
 
     async def receive(self):
+        data = self._receive()
+
+        while data["op"] != self.DISPATCH:
+            if data["op"] == self.HEARTBEAT:
+                self._send_heartbeat()
+            if data["op"] == self.RECONNECT:
+                pass
+            if data["op"] == self.INVALID_SESSION:
+                pass
+            if data["op"] == self.HELLO:
+                pass
+            if data["op"] == self.HEARTBEAT_ACK:
+                pass
+
+        return data
+
+    async def _receive(self):
         msg = await self._ws.receive()
 
         if msg.type == aiohttp.WSMsgType.TEXT or msg.type == aiohttp.WSMsgType.BINARY:
@@ -136,18 +153,19 @@ class Gateway:
         # close the session object
         await self._session.close()
 
-    async def _heartbeater(self, interval):
-        seconds = interval/1000
-
+    async def _send_heartbeat(self):
         data = {
             "op": 1,
             "d": self._seq
         }
+        await self._ws.send_json(data)
+
+    async def _heartbeater(self, interval):
+        seconds = interval/1000
 
         while True:
             await asyncio.sleep(seconds)
             if self._ws.closed:
                 break
-            data["d"] = self._seq
-            await self._ws.send_json(data)
+            await self._send_heartbeat()
 
