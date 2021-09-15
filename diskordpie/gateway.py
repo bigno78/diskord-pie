@@ -165,6 +165,7 @@ class Gateway:
         if msg.type == aiohttp.WSMsgType.CLOSE or msg.type == aiohttp.WSMsgType.CLOSED:
             code = self._ws.close_code
             print(f"WebSocket closed with code {code} and data {msg.data}.")
+            await self._end_heartbeat()
             
             # 1000 is normal close, try resuming
             if code in [ "1000" ]:
@@ -181,6 +182,7 @@ class Gateway:
 
         if msg.type == aiohttp.WSMsgType.ERROR:
             print("WebSocket error.")
+            await self._end_heartbeat()
             raise RuntimeError(msg.data)
 
         raise RuntimeError("Received unknown data from WebSocket:", msg)
