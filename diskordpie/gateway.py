@@ -38,9 +38,13 @@ class Gateway:
         self._ws = None
         self._heartbeat_task = None
         self._heartbeat_acked = True
+        self._session_id = None
 
-    async def connect(self, token) -> None:
+    async def connect(self, token, resume=False) -> None:
         self._session = aiohttp.ClientSession()
+
+        if not self._session_id:
+            resume = False
         
         try:
             gateway_url = await self._get_gateway_url(token)
@@ -56,26 +60,42 @@ class Gateway:
             self._heartbeat_task = asyncio.create_task(self._heartbeater(interval))
         
             # send identify message
-            data = {
-                "op": self.IDENTIFY,
-                "d": {
-                    "token": token,
-                    "intents": 1 << 9,
-                    "properties": {
-                        "$os": sys.platform,
-                        "$browser": "my_library",
-                        "$device": "my_library"
-                    }
-                }
-            }
-
-            await self.send(data)
+            if not resume:
+                await self._identify(token)
+            else:
+                await self._resume(token)
 
         except Exception as e:
             print("Exception when connecting!!!!!")
             if not self._session.closed:
                 await self._session.close()
             raise e
+
+    async def _identify(self, token):
+        data = {
+            "op": self.IDENTIFY,
+            "d": {
+                "token": token,
+                "intents": 1 << 9,
+                "properties": {
+                    "$os": sys.platform,
+                    "$browser": "my_library",
+                    "$device": "my_library"
+                }
+            }
+        }
+        await self.send(data)
+
+    async def _resume(self, token):
+        data = {          
+            "op": self.RESUME,
+            "d": {
+                "token": token,
+                "session_id": self._session_id,
+                "seq": self._seq
+            }
+        }
+        await self.send(data)
 
     async def _get_gateway_url(self, token):
         headers = {
@@ -127,6 +147,9 @@ class Gateway:
                 if data["op"] == self.HEARTBEAT_ACK:
                     self._heartbeat_acked = True
             else:
+                if data["t"] == "READY":
+                    # steal the session id for ourselves
+                    self._session_id = data["d"]["session_id"]
                 return data
 
     async def _receive(self):
