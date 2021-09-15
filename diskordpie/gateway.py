@@ -3,6 +3,18 @@ import asyncio
 import sys
 
 
+class ReconnectGateway(Exception):
+    
+    def __init__(self, resume):
+        self.resume = resume
+
+
+class GatewayDisconnected(Exception):
+
+    def __init__(self, code=None):
+        self.code = code
+
+
 class Gateway:
 
     BASE_URL = "https://discord.com/api/v9"
@@ -25,6 +37,7 @@ class Gateway:
         self._session = None
         self._ws = None
         self._heartbeat_task = None
+        self._heartbeat_acked = True
 
     async def connect(self, token) -> None:
         self._session = aiohttp.ClientSession()
@@ -55,9 +68,8 @@ class Gateway:
                     }
                 }
             }
+
             await self.send(data)
-            data = await self.receive()
-            print(data)
 
         except Exception as e:
             print("Exception when connecting!!!!!")
@@ -97,24 +109,29 @@ class Gateway:
                 raise RuntimeError(f"Request for gateway URL failed with code {r.status} - {r.reason}")
 
     async def receive(self):
-        data = self._receive()
+        while True:
+            data = await self._receive()
 
-        while data["op"] != self.DISPATCH:
-            if data["op"] == self.HEARTBEAT:
-                self._send_heartbeat()
-            if data["op"] == self.RECONNECT:
-                pass
-            if data["op"] == self.INVALID_SESSION:
-                pass
-            if data["op"] == self.HELLO:
-                pass
-            if data["op"] == self.HEARTBEAT_ACK:
-                pass
+            print(f"Received a thingy: ", end="")
+            print(repr(data["op"]))
 
-        return data
+            if data["op"] != self.DISPATCH:
+                if data["op"] == self.HEARTBEAT:
+                    self._send_heartbeat()
+                if data["op"] == self.RECONNECT:
+                    pass
+                if data["op"] == self.INVALID_SESSION:
+                    pass
+                if data["op"] == self.HELLO:
+                    pass
+                if data["op"] == self.HEARTBEAT_ACK:
+                    self._heartbeat_acked = True
+            else:
+                return data
 
     async def _receive(self):
         msg = await self._ws.receive()
+        #print(f"Received a msg: {msg.type}.")
 
         if msg.type == aiohttp.WSMsgType.TEXT or msg.type == aiohttp.WSMsgType.BINARY:
             json_data = msg.json()
@@ -123,8 +140,21 @@ class Gateway:
             return json_data
 
         if msg.type == aiohttp.WSMsgType.CLOSE or msg.type == aiohttp.WSMsgType.CLOSED:
-            print("WebSocket closed.")
-            raise RuntimeError(msg.data)
+            code = self._ws.close_code
+            print(f"WebSocket closed with code {code} and data {msg.data}.")
+            
+            # 1000 is normal close, try resuming
+            if code in [ "1000" ]:
+                raise ReconnectGateway(resume=True)
+            
+            # 4000 Unknown error - maybe we can try to reconnect but probably no resume
+            # 4007 Invalid seq - we provided invalided seq number when resuming
+            #                    let's reconnect
+            # 4009 Session timed out - let's start a new one!!!
+            if code in [ "4000", "4007", "4009" ]:
+                raise ReconnectGateway(resume=False)
+            
+            raise GatewayDisconnected(code)
 
         if msg.type == aiohttp.WSMsgType.ERROR:
             print("WebSocket error.")
@@ -137,21 +167,25 @@ class Gateway:
         await self._ws.send_json(data)
 
     async def close(self):
-        self._heartbeat_task.cancel()
-        
-        # wait for the task to be cancelled
-        try:
-            await self._heartbeat_task
-        except asyncio.CancelledError:
-            pass
-        except Exception:
-            print("Error when cancelling heartbeat task.")
+        await self._end_heartbeat()
 
         # close the websocket
         await self._ws.close()
 
         # close the session object
         await self._session.close()
+
+    async def _end_heartbeat(self):
+        if not self._heartbeat_task.done and not self._heartbeat_task.cancelled:
+            self._heartbeat_task.cancel()
+        
+            # wait for the task to be cancelled
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                print("Error when cancelling heartbeat task.")
 
     async def _send_heartbeat(self):
         data = {
@@ -164,8 +198,16 @@ class Gateway:
         seconds = interval/1000
 
         while True:
-            await asyncio.sleep(seconds)
             if self._ws.closed:
                 break
+            
+            if not self._heartbeat_acked:
+                # close the websocket with non-1000 code
+                print("Heartbeat was not acked! Closing the websocket with code 4000.")
+                await self._ws.close(4000)
+            
             await self._send_heartbeat()
+            self._heartbeat_acked = False
+
+            await asyncio.sleep(seconds)
 
