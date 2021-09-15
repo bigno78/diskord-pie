@@ -1,6 +1,6 @@
+import asyncio
 from .gateway import GatewayDisconnected, Gateway, ReconnectGateway
-
-
+import asyncio
 
 class Bot:
 
@@ -8,20 +8,32 @@ class Bot:
         self._gateway = Gateway()
         self._session_id = None
 
-    async def run(self, token: str):
+    def run(self, token: str):
+        asyncio.run(self._run(token))
+
+    async def _run(self, token: str):
         await self._gateway.connect(token)
 
         while True:
-            msg = await self._gateway.receive()
-            
-            event_type = msg["t"]
-            data = msg["d"]
+            try:
+                msg = await self._gateway.receive()
+                await self._dispatch_event(msg)
+            except ReconnectGateway as e:
+                print(f"Attempting to reconnect: resume={e.resume}.")
+                await self._gateway.connect(e.resume)
+            except GatewayDisconnected as e:
+                print(f"Gateway connection lost forever :(.")
+                break
 
-            if event_type == "READY":
-                self._session_id = data["session_id"]
-                # TODO: store the rest of information
-            else:
-                print("Event received:")
-                print(f"    op:   {msg['op']}")
-                print(f"    type: {msg['t']}")
+    async def _dispatch_event(self, event):
+        event_type = event["t"]
+        data = event["d"]
+
+        if event_type == "READY":
+            self._session_id = data["session_id"]
+            # TODO: store the rest of information
+        else:
+            print("Event received:")
+            print(f"    op:   {event['op']}")
+            print(f"    type: {event['t']}")
     
