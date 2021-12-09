@@ -118,6 +118,7 @@ class Gateway:
 
                 # the request was ok
                 if 200 <= r.status and r.status < 300:
+                    print(r.headers)
                     return data["url"]
 
                 # rate limit exceeded
@@ -147,6 +148,7 @@ class Gateway:
                 if data["op"] == self.HEARTBEAT_ACK:
                     self._heartbeat_acked = True
             else:
+                # is this the ready event?
                 if data["t"] == "READY":
                     # steal the session id for ourselves
                     self._session_id = data["d"]["session_id"]

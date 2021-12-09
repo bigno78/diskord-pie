@@ -1,12 +1,15 @@
 import asyncio
+from diskordpie.http import HttpClient
 from .gateway import GatewayDisconnected, Gateway, ReconnectGateway
 import asyncio
+
 
 class Bot:
 
     def __init__(self):
         self._gateway = Gateway()
         self._session_id = None
+        self._http = HttpClient()
 
     def run(self, token: str):
         asyncio.run(self._run(token))
