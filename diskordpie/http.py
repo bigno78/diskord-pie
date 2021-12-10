@@ -2,23 +2,10 @@ import aiohttp
 import asyncio
 import time
 
+from typing import Dict, Union
 
-def parse_rate_headers(headers):
-    limit = None
-    remaining = None
-    reset_at = None
-
-    if "X-RateLimit-Limit" in headers:
-        limit = int(headers["X-RateLimit-Limit"])
-
-    if "X-RateLimit-Remaining" in headers:
-        limit = int(headers["X-RateLimit-Remaining"])
-
-    if "X-RateLimit-Limit" in headers:
-        limit = int(headers["X-RateLimit-Limit"])
 
 class Route:
-
     def __init__(self, path: str, method: str):
         self.path = path
         self.method = method
@@ -31,83 +18,127 @@ class Route:
     def __hash__(self):
         return hash( (self.path, self.method) )
 
+    def __str__(self):
+        return self.method + ":" + self.path
+    
+    def __repr__(self):
+        return str(self)
+
+
+def parse_rate_header(headers, target, conversion_func):
+    if target in headers:
+        return conversion_func( headers[target] )
+    return None
+
+
+class RateLimitInfo:
+    def __init__(self, headers):
+        self.limit = parse_rate_header(headers, "X-RateLimit-Limit", int)
+        self.remaining = parse_rate_header(headers, "X-RateLimit-Remaining", int)
+        self.reset = parse_rate_header(headers, "X-RateLimit-Reset", float)
+        self.reset_after = parse_rate_header(headers, "X-RateLimit-Reset-After", float)
+        self.bucket = parse_rate_header(headers, "X-RateLimit-Bucket", str)
+        self.is_global = parse_rate_header(headers, "X-RateLimit-Global", bool)
+        self.scope = parse_rate_header(headers, "X-RateLimit-Scope", str)
+
+    def __str__(self):
+        return f"RateInfo{{remaining={self.remaining}, reset={self.reset}, reset_after={self.reset_after}}}"
+    
+    def __repr__(self):
+        return str(self)
+
+
+class GlobalLimiter:
+    def __init__(self):
+        self._next_refresh = time.time()
+        self._limit = 50
+        self._remaining = self._limit
+        self._refresh_period = 1
+        
+        self._open = asyncio.Event()
+        self._open.set()
+        self._sleeping = 0
+    
+    async def wait(self):
+        await self._open.wait()
+
+        while self._remaining == 0:
+            if self._next_refresh > time.time():
+                await asyncio.sleep(self._next_refresh - time.time())
+                await self._open.wait()
+            # only refresh if we are the first one who woke up
+            if self._remaining == 0:
+                self._refresh()
+        
+        self._remaining -= 1
+
+    async def handle_limit(self, error_json):
+        if not error_json.get("global"):
+            return
+        self._sleeping += 1
+        self._open.clear()
+        await asyncio.sleep(error_json["retry_after"])
+        self._sleeping -= 1
+        if self._sleeping == 0:
+            self._open.set()
+            self._refresh()
+
+    def _refresh(self):
+        self._next_refresh = time.time() + self._refresh_period
+        self._remaining = self._limit
+
 
 class Bucket:
+    def __init__(self, rate: RateLimitInfo):
+        self.remaining = None
+        self.reset_at = None    
+        self._lock = asyncio.Lock()
+        self.update(rate)
 
-    def __init__(self, limit, remaning, reset_at):
-        self.limit = limit
-        self.remaining = remaning
-        self.reset_at = reset_at
-        
-        self._can_proceed = asyncio.Event()
-        self._can_proceed.set()
+    async def __aenter__(self):
+        await self._lock.acquire()
+        return self
 
-    async def limit_the_rate(self):
-        """
-        Performs rate limiting. After this method returns
-        the calling task is allowed to send one request.
+    async def __aexit__(self, ex_type, ex_val, ex_traceback):
+        self._lock.release()
 
-        Checks whether there are any requests left in the bucket
-        and if not waits for it to reset.
-        """
-        await self._can_proceed.wait()
+    async def wait(self) -> None:
+        if self.remaining == 0:
+            print("Slow down buddy!")
+            wait_for = self.reset_at - time.time()
+            if wait_for > 0:
+                await asyncio.sleep(wait_for)
 
-        if time.time() >= self.reset_at:
-            # allow this task to continue but let others wait
-            # until this task receives a response from discord and calls update
-            # so we know how to correctly update 'reset_at' and 'remaining'
-            self._can_proceed.clear()
-            return
-        
-        if self.remaining > 0:
-            # it is not time to reset and we still have some requests
-            # so let the task continue
-            self.remaining -= 1
-            return
+    def update(self, rate: RateLimitInfo) -> None:
+        self.remaining = rate.remaining
+        # primarily use 'rate.reset_after' since our clock might not by synchronized with discord
+        # (mine seems to be running several seconds out of sync)
+        if not rate.reset_after:
+            raise Exception("No reset_after.")
+        self.reset_at = time.time() + rate.reset_after
 
-        # now we have no request left so everyone has to wait 
-        # until this task resets the bucket
-        self._can_proceed.clear()
-        if time.time() < self.reset_at:
-            await asyncio.sleep(self.reset_at - time.time())
+    def __str__(self) -> str:
+        return f"Bucket{{remaining={self.remaining}, reset_after={self.reset_at-time.time()}}}"
 
-        # allow the task to send the request but don't set the _can_proceed flag yet
-        # we have to wait for the task to call update() with the rate limiting
-        # information received from discord
-        
-    def update(self, headers):
-        """
-        Updates the bucket with newly received rate limiting headers.
-        Should be called after every succesfuly received response.
-        """
-
-        # we definitely dont wanna update 'remaining'
-        # if the 'new_remaining' is higher, since between the time
-        # the server generated this answer and this method was called
-        # other tasks might have sent their requests
-
-        if not self._can_proceed.is_set():
-            # we are the task who is reseting the bucket
-            # TODO: stuff
-            self._can_proceed.set()
+    def __repr__(self) -> str:
+        return str(self)
 
 
-class GlobalBucket(Bucket):
+class DefaultBucket:
+    async def __aenter__(self):
+        return self
 
-    def __init__(self, limit, remaning, reset_at):
-        super().__init__(limit, remaning, reset_at)
+    async def __aexit__(self, ex_type, ex_val, ex_traceback):
+        return 
 
-    async def limit_the_rate(self):
-        await self._can_proceed.wait()
+    async def wait(self):
+        return
 
-        if self.remaining > 0:
-            self.remaining -= 1
-            return
+    def __str__(self) -> str:
+        return "DefaultBucket"
 
-        self._can_proceed.clear()
-        await asyncio.sleep(1)
-        self.remaining = self.limit - 1
-        self._can_proceed.set()
+    def __repr__(self) -> str:
+        return str(self)
 
 
 class DiskordHttpError(Exception):
@@ -117,8 +148,6 @@ class DiskordHttpError(Exception):
         self.error_json = error_json
 
         
-
-
 class HttpClient:
 
     BASE_URL = "https://discord.com/api/v9"
@@ -128,28 +157,38 @@ class HttpClient:
         self._token = None
 
         # rate limiting stuff
-        self._route_to_bucket = {} # maps routes to bucket ids
-        self._buckets = {} # maps bucket ids to Bucket objects
-        self._global_bucket = Bucket(limit=50, remaning=50, reset_at=1+time.time())
+        self._route_to_bucket: Dict[Route, str] = {}
+        self._buckets: Dict[str, Bucket] = {}
+        self._global_limiter = GlobalLimiter()
+        self._default_bucket = DefaultBucket()
+
+    async def post(self, url, data):
+        return await self.send_request("POST", url, data)
+
+    async def get(self, path):
+        return await self.send_request("GET", path)
 
     async def close_session(self):
-        await self._session.close()
+        if self._session:
+            await self._session.close()
 
     async def open_session(self):
         if self._session:
             raise Exception("Can't open a new session: a session already exists.")
         self._session = aiohttp.ClientSession()
-
-    async def post(self, url, data):
-        self.send_request("POST", url, data)
-
-    async def get(self, url, data):
-        self.send_request("GET", url, data)
+    
+    def _get_bucket(self, route: Route) -> Union[Bucket, DefaultBucket]:
+        bucket_id = self._route_to_bucket.get(route)
+        if not bucket_id:
+            return self._default_bucket
+        bucket = self._buckets.get(bucket_id)
+        return bucket if bucket else self._default_bucket
 
     async def send_request(self, method: str, path: str, json_data=None, headers=None, params=None):
         if not self._token:
             raise Exception("HttpClient: send_request: no token set!")
 
+        route = Route(path, method)
         url = self.BASE_URL + path
         
         if not headers:
@@ -159,27 +198,41 @@ class HttpClient:
         if "Authorization" not in headers:
             headers["Authorization"] = "Bot " + self._token
         if "User-Agenet" not in headers:
-            headers["User-Agent"] = "DiscordBot (diskordos 0.0.1)"
-
-        # let's attempt to send the request 5 times
-        for i in range(5):
-            async with self._session.request(method=method, url=url, json=json_data, headers=headers, params=params) as r:
-                data = await r.json()
-
-                # the request was ok
-                if 200 <= r.status and r.status < 300:
-                    return data["url"]
-
-                # rate limit exceeded
-                if r.status == 429:
-                    retry_after = data["retry_after"]
-                    await asyncio.sleep(retry_after)
-                    continue
+            headers["User-Agent"] = "DiscordBot (diskord-pie)"
+        
+        for i in range(4):
+            async with self._get_bucket(route) as bucket:
+                await bucket.wait()
+                await self._global_limiter.wait()
                 
-                # TODO: possibly handle other status codes 
-                #       https://discord.com/developers/docs/topics/opcodes-and-status-codes
+                async with self._session.request(method=method, url=url, json=json_data, headers=headers, params=params) as r:
+                    print(f"received HTTP response with code {r.status}")
 
-                raise DiskordHttpError(r.status, r.reason, data)
+                    rate = RateLimitInfo(r.headers)
+                    
+                    if rate.bucket:
+                        if rate.bucket not in self._buckets:
+                            self._buckets[rate.bucket] = Bucket(rate)
+                        else:
+                            self._buckets[rate.bucket].update(rate)
+                        self._route_to_bucket[route] = rate.bucket
+                    
+                    # rate limit exceeded
+                    if r.status == 429:
+                        print(f"WARNING: route {route} is being rate limited!")
+                        data = await r.json()
+                        if data["global"]:
+                            await self._global_limiter.handle_limit(data)
+                        else:
+                            bucket.remaining = 0
+                            bucket.reset_at = time.time() + data["retry_after"]   
+                        continue
 
-    def _get_bucket(self, path, method) -> Bucket:
-        return self._buckets[ self._route_to_bucket[Route(path, method)] ]
+                    # the request was ok
+                    if 200 <= r.status and r.status < 300:
+                        return await r.json()
+                    
+                    # TODO: possibly handle other status codes 
+                    #       https://discord.com/developers/docs/topics/opcodes-and-status-codes
+
+                    raise DiskordHttpError(r.status, r.reason)
