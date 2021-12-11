@@ -1,0 +1,2 @@
+# older versions don't support params in ws_connect()
+aiohttp >= 3.8.1
