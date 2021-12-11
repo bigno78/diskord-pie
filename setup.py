@@ -1,8 +1,11 @@
 from setuptools import setup
 
+def is_comment(s):
+    return s.lstrip().startswith("#")
+
 requirements = []
 with open('requirements.txt') as f:
-  requirements = f.read().splitlines()
+  requirements = list(filter(lambda r: not is_comment(r), f.read().splitlines()))
 
 setup(
     name='diskord-pie',
