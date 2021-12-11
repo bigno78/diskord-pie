@@ -152,8 +152,8 @@ class HttpClient:
 
     BASE_URL = "https://discord.com/api/v9"
 
-    def __init__(self) -> None:
-        self._session = aiohttp.ClientSession()
+    def __init__(self, session: aiohttp.ClientSession) -> None:
+        self._session = session
         self._token = None
 
         # rate limiting stuff

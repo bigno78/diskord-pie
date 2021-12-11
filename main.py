@@ -1,21 +1,32 @@
-from diskordpie.bot import Bot
+#from diskordpie.bot import Bot
 import asyncio
 import aiohttp
 import json
 
-from diskordpie.http import Route
+import diskordpie
+
+#from diskordpie.http import Route
 
 def main():
-    b = Bot()
+    b = diskordpie.bot.Bot()
     b.run("NzE4MDAyNzczMzA3OTQ5MTE3.XtiiMQ.6kzS27RWzHPW7Q-DCAYocl_OQtI")
 
 async def test_aio():
-    async with aiohttp.ClientSession() as session:
-        async with session.request("GET", "https://diskcord.com/apii/v9") as r:
-            print(f"STATUS: {r.status} {r.reason}")
-            print(await r.read())
+    http = diskordpie.http.HttpClient()
+    http._token = "NzE4MDAyNzczMzA3OTQ5MTE3.XtiiMQ.6kzS27RWzHPW7Q-DCAYocl_OQtI"
+
+    for i in range(5):
+        r = await http.get("/gateway/bot")
+        if not r:
+            break
+        print()
+
+    await http.close_session()
 
 
 if __name__ == "__main__":
-    #main()
-    asyncio.run(test_aio())
+    # headers = {"X-RateLimit-Limit": "25.6"}
+    # c = diskordpie.http.parse_rate_header(headers, "X-RateLimit-Limit", float)
+    # print(c)
+    main()
+    #asyncio.run(test_aio())

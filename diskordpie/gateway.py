@@ -1,6 +1,11 @@
+from asyncio.locks import Event
+from re import U
 import aiohttp
 import asyncio
 import sys
+from . import http
+from .event import DiscordEvent
+import random
 
 
 class ReconnectGateway(Exception):
@@ -14,11 +19,53 @@ class GatewayDisconnected(Exception):
     def __init__(self, code=None):
         self.code = code
 
+class CloseCode:
+    CLOSE_NORMAL = 1000
+    UNKNOWN_ERROR = 4000	
+    UNKNOWN_OPCODE = 4001
+    DECODE_ERROR = 4002
+    NOT_AUTHENTICATED = 4003
+    AUTHENTICATION_FAILED = 4004
+    ALREADY_AUTHENTICATED = 4005	
+    INVALID_SEQ = 4007	
+    RATE_LIMITED = 4008	
+    SESSION_TIMED = 4009 
+    INVALID_SHARD = 4010	
+    SHARDING_REQUIRED = 4011	
+    INVALID_API_VERSION = 4012	
+    INVALID_INTENTS = 4013	
+    DISALLOWED_INTENTS = 4014
+    NO_HEARTBEAT_ACK = 4420
+    
+    code_strings = {
+        CLOSE_NORMAL: "Normal_close",
+        UNKNOWN_ERROR: "Unknown_error",
+        UNKNOWN_OPCODE: "Unknown_opcode",
+        DECODE_ERROR: "Decode_error",
+        NOT_AUTHENTICATED: "Not_authenticated",
+        AUTHENTICATION_FAILED: "Authentication_failed",
+        ALREADY_AUTHENTICATED: "Already_authenticated",
+        INVALID_SEQ: "Invalid_seq",
+        RATE_LIMITED: "Rate_limited",
+        SESSION_TIMED: "Session_timed",
+        INVALID_SHARD: "Invalid_shard",
+        SHARDING_REQUIRED: "Sharding_required",
+        INVALID_API_VERSION: "Invalid_API_version",
+        INVALID_INTENTS: "Invalid_intents",
+        DISALLOWED_INTENTS: "Disallowed_intents",
+        NO_HEARTBEAT_ACK: "No_heartbeat_ack"
+    }
+
+    @staticmethod
+    def description(code: int) -> str:
+        if code in CloseCode.code_strings:
+            return CloseCode.code_strings[code]
+        return "Unknown_close_code"
+
 
 class Gateway:
 
-    BASE_URL = "https://discord.com/api/v9"
-    GET_GATEWAY_URL = BASE_URL + "/gateway/bot"
+    GET_GATEWAY_PATH = "/gateway/bot"
 
     DISPATCH = 0
     HEARTBEAT = 1
@@ -32,23 +79,35 @@ class Gateway:
     HELLO = 10
     HEARTBEAT_ACK = 11
 
-    def __init__(self) -> None:
+    def __init__(self, session: aiohttp.ClientSession, http: http.HttpClient) -> None:
+        self._session = session
+        self._http = http
         self._seq = None
-        self._session = None
         self._ws = None
         self._heartbeat_task = None
         self._heartbeat_acked = True
         self._session_id = None
+        self._token = None
+
+        self.resuming = False
 
     async def connect(self, token, resume=False) -> None:
-        self._session = aiohttp.ClientSession()
-
-        if not self._session_id:
-            resume = False
+        if resume and not self._session_id:
+            print("Can't resume without session_id!")
+            raise ReconnectGateway(resume=False)
         
+        self.resuming = resume
+        self._token = token
+
         try:
             gateway_url = await self._get_gateway_url(token)
-            self._ws = await self._session.ws_connect(gateway_url)
+
+            params = {
+                "v": 9,
+                "encoding": "json"
+            }
+
+            self._ws = await self._session.ws_connect(gateway_url, params=params)
 
             # receive hello message
             hello_msg = await self._receive()
@@ -58,17 +117,16 @@ class Gateway:
 
             # start heartbeat
             self._heartbeat_task = asyncio.create_task(self._heartbeater(interval))
-        
-            # send identify message
+            
+            # send identify message or resume
             if not resume:
                 await self._identify(token)
             else:
                 await self._resume(token)
 
         except Exception as e:
-            print("Exception when connecting!!!!!")
-            if not self._session.closed:
-                await self._session.close()
+            print("ERROR: Exception when connecting to the gateway!")
+            await self.close()
             raise e
 
     async def _identify(self, token):
@@ -79,8 +137,8 @@ class Gateway:
                 "intents": 1 << 9,
                 "properties": {
                     "$os": sys.platform,
-                    "$browser": "my_library",
-                    "$device": "my_library"
+                    "$browser": "diskord-pie",
+                    "$device": "diskord-pie"
                 }
             }
         }
@@ -97,89 +155,73 @@ class Gateway:
         }
         await self.send(data)
 
-    async def _get_gateway_url(self, token):
-        headers = {
-            "Authorization": "Bot " + token,
-            "User-Agent": "DiscordBot (diskordos 0.0.1)"
-        }
+    async def _get_gateway_url(self, token: str) -> str:
+        data = await self._http.get(Gateway.GET_GATEWAY_PATH)
+        if data["shards"] > 1:
+            print("WARNING: Discord is recomending to use more shards then one!")
+        return data["url"]
 
-        params = {
-            "v": 9,
-            "encoding": "json"
-        }
-
-        # the number of retries in case of rate limiting after which
-        # we give up and assume we are banned
-        retries = 3
-
-        for _ in range(retries):
-            async with self._session.get(Gateway.GET_GATEWAY_URL, headers=headers, params=params) as r:
-                data = await r.json()
-
-                # the request was ok
-                if 200 <= r.status and r.status < 300:
-                    print(r.headers)
-                    return data["url"]
-
-                # rate limit exceeded
-                if r.status == 429:
-                    retry_after = data["retry_after"]
-                    asyncio.sleep(retry_after)
-                    continue
-
-                raise RuntimeError(f"Request for gateway URL failed with code {r.status} - {r.reason}")
-
-    async def receive(self):
+    async def next_event(self):
         while True:
             data = await self._receive()
+            op = data["op"]
 
             print(f"Received a thingy: ", end="")
-            print(repr(data["op"]))
+            print(repr(op))
 
-            if data["op"] != self.DISPATCH:
-                if data["op"] == self.HEARTBEAT:
-                    self._send_heartbeat()
-                if data["op"] == self.RECONNECT:
-                    pass
-                if data["op"] == self.INVALID_SESSION:
-                    pass
-                if data["op"] == self.HELLO:
-                    pass
-                if data["op"] == self.HEARTBEAT_ACK:
-                    self._heartbeat_acked = True
-            else:
-                # is this the ready event?
+            if op == self.DISPATCH:
                 if data["t"] == "READY":
-                    # steal the session id for ourselves
+                    # steal the session id for ourselves before handing the event over
                     self._session_id = data["d"]["session_id"]
-                return data
-
+                if data["t"] == "RESUMED":
+                    self.resuming = False
+                return DiscordEvent(data)
+            
+            if op == self.HEARTBEAT:
+                self._send_heartbeat()
+            if op == self.RECONNECT:
+                # we should immediately reconnect and resume
+                print("We were requested to reconnect.")
+                await self.close()
+                raise ReconnectGateway(resume=True)
+            if op == self.INVALID_SESSION:
+                if self.resuming:
+                    print("WARNING: Resuming failed. Send identify instead.")
+                    await asyncio.sleep(random.uniform(1, 5))
+                    await self._identify(self._token)
+                else:
+                    raise ReconnectGateway(resume=op["d"])
+            if op == self.HELLO:
+                print("WARNING: Unexpected HELLO message.")
+            if op == self.HEARTBEAT_ACK:
+                self._heartbeat_acked = True
+            
     async def _receive(self):
         msg = await self._ws.receive()
         #print(f"Received a msg: {msg.type}.")
 
         if msg.type == aiohttp.WSMsgType.TEXT or msg.type == aiohttp.WSMsgType.BINARY:
             json_data = msg.json()
-            if "s" in json_data:
+            if json_data.get("s"):
                 self._seq = json_data["s"]
             return json_data
 
         if msg.type == aiohttp.WSMsgType.CLOSE or msg.type == aiohttp.WSMsgType.CLOSED:
             code = self._ws.close_code
-            print(f"WebSocket closed with code {code} and data {msg.data}.")
+            print(f"WebSocket closed with code {code} {CloseCode.description(code)} and data '{msg.data}'")
+
             await self._end_heartbeat()
             
-            # 1000 is normal close, try resuming
-            if code in [ "1000" ]:
+            # codes for which we will try to resume the session
+            if code in [ CloseCode.CLOSE_NORMAL, CloseCode.NO_HEARTBEAT_ACK ]:
                 raise ReconnectGateway(resume=True)
             
-            # 4000 Unknown error - maybe we can try to reconnect but probably no resume
-            # 4007 Invalid seq - we provided invalided seq number when resuming
-            #                    let's reconnect
-            # 4009 Session timed out - let's start a new one!!!
-            if code in [ "4000", "4007", "4009" ]:
+            # codes for which we will try to reconnect and create new session
+            # currently no codes
+            if code in [ ]:
                 raise ReconnectGateway(resume=False)
             
+            # now just give up
             raise GatewayDisconnected(code)
 
         if msg.type == aiohttp.WSMsgType.ERROR:
@@ -189,21 +231,43 @@ class Gateway:
 
         raise RuntimeError("Received unknown data from WebSocket:", msg)
 
-
     async def send(self, data):
         await self._ws.send_json(data)
 
     async def close(self):
-        await self._end_heartbeat()
+        if self._ws and not self._ws.closed:
+                await self._ws.close()
+        if self._heartbeat_task:
+            await self._end_heartbeat()
 
-        # close the websocket
-        await self._ws.close()
+    async def _heartbeater(self, interval_ms):
+        seconds = interval_ms/1000
 
-        # close the session object
-        await self._session.close()
+        jitter = seconds * random.random()
+        await asyncio.sleep(jitter)
+        
+        while True:
+            if self._ws.closed:
+                break
+            
+            if not self._heartbeat_acked:
+                # as per documentation close the websocket with non-1000 code
+                # and attempt to resume
+                print("Heartbeat was not acked! Closing the websocket.")
+                await self._ws.close(code=CloseCode.NO_HEARTBEAT_ACK)
+            
+            self._heartbeat_acked = False
+            await self._send_heartbeat()
 
+            await asyncio.sleep(seconds)
+    
     async def _end_heartbeat(self):
-        if not self._heartbeat_task.done and not self._heartbeat_task.cancelled:
+        if not self._heartbeat_task:
+            return
+
+        print("Ending heartbeat")
+
+        if not self._heartbeat_task.done() and not self._heartbeat_task.cancelled():
             self._heartbeat_task.cancel()
         
             # wait for the task to be cancelled
@@ -212,7 +276,7 @@ class Gateway:
             except asyncio.CancelledError:
                 pass
             except Exception:
-                print("Error when cancelling heartbeat task.")
+                print("ERROR: Unexpected exception when cancelling heartbeat task.")
 
     async def _send_heartbeat(self):
         data = {
@@ -220,21 +284,3 @@ class Gateway:
             "d": self._seq
         }
         await self._ws.send_json(data)
-
-    async def _heartbeater(self, interval):
-        seconds = interval/1000
-
-        while True:
-            if self._ws.closed:
-                break
-            
-            if not self._heartbeat_acked:
-                # close the websocket with non-1000 code
-                print("Heartbeat was not acked! Closing the websocket with code 4000.")
-                await self._ws.close(4000)
-            
-            await self._send_heartbeat()
-            self._heartbeat_acked = False
-
-            await asyncio.sleep(seconds)
-
