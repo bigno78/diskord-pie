@@ -6,6 +6,7 @@ import aiohttp
 import time
 from .event import DiscordEvent
 
+__all__ = [ "Bot" ]
 
 class Bot:
 

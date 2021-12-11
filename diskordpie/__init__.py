@@ -1,6 +1,1 @@
-#import bot
-#import gateway
-#import http
-
-from . import bot
-from . import http
+from .bot import *

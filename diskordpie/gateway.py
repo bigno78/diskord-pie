@@ -7,6 +7,7 @@ from . import http
 from .event import DiscordEvent
 import random
 
+__all__ = [ "Gateway", "ReconnectGateway", "GatewayDisconnected" ]
 
 class ReconnectGateway(Exception):
     

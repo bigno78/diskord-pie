@@ -4,6 +4,7 @@ import time
 
 from typing import Dict, Union
 
+__all__ = [ "HttpClient", "DiskordHttpError" ]
 
 class Route:
     def __init__(self, path: str, method: str):
