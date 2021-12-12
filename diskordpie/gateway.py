@@ -1,11 +1,11 @@
-from asyncio.locks import Event
-from re import U
 import aiohttp
 import asyncio
 import sys
+import random
+
 from . import http
 from .event import DiscordEvent
-import random
+
 
 __all__ = [ "Gateway", "ReconnectGateway", "GatewayDisconnected" ]
 
