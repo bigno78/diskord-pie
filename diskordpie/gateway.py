@@ -3,6 +3,8 @@ import asyncio
 import sys
 import random
 
+from enum import IntEnum
+
 from . import http
 from .event import DiscordEvent
 
@@ -20,7 +22,8 @@ class GatewayDisconnected(Exception):
     def __init__(self, code=None):
         self.code = code
 
-class CloseCode:
+
+class CloseCode(IntEnum):
     CLOSE_NORMAL = 1000
     UNKNOWN_ERROR = 4000	
     UNKNOWN_OPCODE = 4001
@@ -37,31 +40,13 @@ class CloseCode:
     INVALID_INTENTS = 4013	
     DISALLOWED_INTENTS = 4014
     NO_HEARTBEAT_ACK = 4420
-    
-    code_strings = {
-        CLOSE_NORMAL: "Normal_close",
-        UNKNOWN_ERROR: "Unknown_error",
-        UNKNOWN_OPCODE: "Unknown_opcode",
-        DECODE_ERROR: "Decode_error",
-        NOT_AUTHENTICATED: "Not_authenticated",
-        AUTHENTICATION_FAILED: "Authentication_failed",
-        ALREADY_AUTHENTICATED: "Already_authenticated",
-        INVALID_SEQ: "Invalid_seq",
-        RATE_LIMITED: "Rate_limited",
-        SESSION_TIMED: "Session_timed",
-        INVALID_SHARD: "Invalid_shard",
-        SHARDING_REQUIRED: "Sharding_required",
-        INVALID_API_VERSION: "Invalid_API_version",
-        INVALID_INTENTS: "Invalid_intents",
-        DISALLOWED_INTENTS: "Disallowed_intents",
-        NO_HEARTBEAT_ACK: "No_heartbeat_ack"
-    }
 
-    @staticmethod
-    def description(code: int) -> str:
-        if code in CloseCode.code_strings:
-            return CloseCode.code_strings[code]
-        return "Unknown_close_code"
+def _close_code_str(code: int):
+    try:
+        c = CloseCode(code)
+        return str(c)
+    except ValueError:
+        return "UNKNOWN_CODE"
 
 
 class Gateway:
@@ -209,7 +194,7 @@ class Gateway:
 
         if msg.type == aiohttp.WSMsgType.CLOSE or msg.type == aiohttp.WSMsgType.CLOSED:
             code = self._ws.close_code
-            print(f"WebSocket closed with code {code} {CloseCode.description(code)} and data '{msg.data}'")
+            print(f"WebSocket closed with code {code} {_close_code_str(code)} and data '{msg.data}'")
 
             await self._end_heartbeat()
             
