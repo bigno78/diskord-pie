@@ -49,10 +49,7 @@ def _close_code_str(code: int):
         return "UNKNOWN_CODE"
 
 
-class Gateway:
-
-    GET_GATEWAY_PATH = "/gateway/bot"
-
+class OpCode(IntEnum):
     DISPATCH = 0
     HEARTBEAT = 1
     IDENTIFY = 2
@@ -64,6 +61,11 @@ class Gateway:
     INVALID_SESSION = 9
     HELLO = 10
     HEARTBEAT_ACK = 11
+
+
+class Gateway:
+
+    GET_GATEWAY_PATH = "/gateway/bot"
 
     def __init__(self, session: aiohttp.ClientSession, http: http.HttpClient) -> None:
         self._session = session
@@ -97,7 +99,7 @@ class Gateway:
 
             # receive hello message
             hello_msg = await self._receive()
-            if not hello_msg["op"] == self.HELLO:
+            if not hello_msg["op"] == OpCode.HELLO:
                 raise RuntimeError("First msg received was not HELLO.")
             interval = hello_msg["d"]["heartbeat_interval"]
 
@@ -117,7 +119,7 @@ class Gateway:
 
     async def _identify(self, token):
         data = {
-            "op": self.IDENTIFY,
+            "op": OpCode.IDENTIFY,
             "d": {
                 "token": token,
                 "intents": 1 << 9,
@@ -132,7 +134,7 @@ class Gateway:
 
     async def _resume(self, token):
         data = {          
-            "op": self.RESUME,
+            "op": OpCode.RESUME,
             "d": {
                 "token": token,
                 "session_id": self._session_id,
@@ -155,7 +157,7 @@ class Gateway:
             print(f"Received a thingy: ", end="")
             print(repr(op))
 
-            if op == self.DISPATCH:
+            if op == OpCode.DISPATCH:
                 if data["t"] == "READY":
                     # steal the session id for ourselves before handing the event over
                     self._session_id = data["d"]["session_id"]
@@ -163,23 +165,23 @@ class Gateway:
                     self.resuming = False
                 return DiscordEvent(data)
             
-            if op == self.HEARTBEAT:
+            if op == OpCode.HEARTBEAT:
                 self._send_heartbeat()
-            if op == self.RECONNECT:
+            if op == OpCode.RECONNECT:
                 # we should immediately reconnect and resume
                 print("We were requested to reconnect.")
                 await self.close()
                 raise ReconnectGateway(resume=True)
-            if op == self.INVALID_SESSION:
+            if op == OpCode.INVALID_SESSION:
                 if self.resuming:
                     print("WARNING: Resuming failed. Send identify instead.")
                     await asyncio.sleep(random.uniform(1, 5))
                     await self._identify(self._token)
                 else:
                     raise ReconnectGateway(resume=op["d"])
-            if op == self.HELLO:
+            if op == OpCode.HELLO:
                 print("WARNING: Unexpected HELLO message.")
-            if op == self.HEARTBEAT_ACK:
+            if op == OpCode.HEARTBEAT_ACK:
                 self._heartbeat_acked = True
             
     async def _receive(self):
@@ -266,7 +268,7 @@ class Gateway:
 
     async def _send_heartbeat(self):
         data = {
-            "op": 1,
+            "op": OpCode.HEARTBEAT,
             "d": self._seq
         }
         await self._ws.send_json(data)
