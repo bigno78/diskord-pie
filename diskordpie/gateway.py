@@ -249,7 +249,7 @@ class Gateway:
                 break
             
             if not self._heartbeat_acked:
-                # as per documentation close the websocket with non-1000 code
+                # as per discord documentation close the websocket with non-1000 code
                 # and attempt to resume
                 _logger.warning(f"Hartbeat was not acked! Closing the websocket.")
                 await self._ws.close(code=CloseCode.NO_HEARTBEAT_ACK)
