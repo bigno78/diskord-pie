@@ -1,7 +1,7 @@
 import asyncio
 import asyncio
 import aiohttp
-import time
+import logging
 
 from .http import HttpClient
 from .gateway import CloseCode, GatewayDisconnected, Gateway, ReconnectGateway
@@ -10,12 +10,14 @@ from .commands import SlashCommand
 
 __all__ = [ "Bot" ]
 
+_logger = logging.Logger(__name__)
+
 
 class Bot:
 
     def __init__(self):
         self._session_id = None
-        self._session_http = None
+        self._http_session = None
         self._http = None
         self._gateway = None
         self._commands = []
@@ -26,10 +28,10 @@ class Bot:
     async def _run(self, token: str):
         # apparently ClientSession has to be created in a coroutine 
         # so let's initialize everything here
-        self._session_http = aiohttp.ClientSession()
-        self._http = HttpClient(self._session_http)
+        self._http_session = aiohttp.ClientSession()
+        self._http = HttpClient(self._http_session)
         self._http._token = token
-        self._gateway = Gateway(self._session_http, self._http)
+        self._gateway = Gateway(self._http_session, self._http)
         
         await self._gateway.connect(token)
 
@@ -38,10 +40,10 @@ class Bot:
                 event = await self._gateway.next_event()
                 await self._dispatch_event(event)
             except ReconnectGateway as e:
-                print(f"Attempting to reconnect: resume={e.resume}.")
+                _logger.warning(f"Attempting to reconnect: resume={e.resume}.")
                 await self._gateway.connect(token, resume=e.resume)
             except GatewayDisconnected as e:
-                print(f"Gateway connection lost forever :(.")
+                _logger.error(f"Gateway connection lost forever :(.")
                 break
 
     async def _dispatch_event(self, event):
@@ -51,12 +53,6 @@ class Bot:
         elif event.type == "RESUMED":
             print("Resuming finished.")
         elif event.type == "MESSAGE_CREATE":
-            if event.data["content"] == "resume":
-                print("Gonna resume.")
-                await self._gateway._ws.close(code=CloseCode.NO_HEARTBEAT_ACK)
-            if event.data["content"] == "res":
-                print("resing.")
-                await self._gateway._end_heartbeat()
             print("Message: " + event.data["content"])            
         else:
             print("Event received:")
