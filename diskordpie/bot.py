@@ -7,10 +7,11 @@ from .http import HttpClient
 from .gateway import CloseCode, GatewayDisconnected, Gateway, ReconnectGateway
 from .event import DiscordEvent
 from .commands import SlashCommand
+from .entities import User, Application
 
 __all__ = [ "Bot" ]
 
-_logger = logging.Logger(__name__)
+_logger = logging.getLogger(__name__)
 
 
 class Bot:
@@ -21,6 +22,9 @@ class Bot:
         self._http = None
         self._gateway = None
         self._commands = []
+
+        self.user = None
+        self.app = None
 
     def run(self, token: str):
         asyncio.run(self._run(token))
@@ -48,8 +52,12 @@ class Bot:
 
     async def _dispatch_event(self, event):
         if event.type == "READY":
-            print("Received READY event.")
+            _logger.info(f"Connected to gateway version {event.data['v']} as shard {event.data.get('shard')}")
             self._session_id = event.data["session_id"]
+            self.user = User(**event.data["user"])
+            self.app = User(**event.data["application"])
+            _logger.info(f"Bot user is {self.user.username}")
+            _logger.info(f"App is {self.app.id}")
         elif event.type == "RESUMED":
             print("Resuming finished.")
         elif event.type == "MESSAGE_CREATE":
