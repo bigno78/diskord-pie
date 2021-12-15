@@ -1,12 +1,15 @@
 import asyncio
-from diskordpie.http import HttpClient
-from .gateway import CloseCode, GatewayDisconnected, Gateway, ReconnectGateway
 import asyncio
 import aiohttp
 import time
+
+from .http import HttpClient
+from .gateway import CloseCode, GatewayDisconnected, Gateway, ReconnectGateway
 from .event import DiscordEvent
+from .commands import SlashCommand
 
 __all__ = [ "Bot" ]
+
 
 class Bot:
 
@@ -15,6 +18,7 @@ class Bot:
         self._session_http = None
         self._http = None
         self._gateway = None
+        self._commands = []
 
     def run(self, token: str):
         asyncio.run(self._run(token))
@@ -57,4 +61,11 @@ class Bot:
         else:
             print("Event received:")
             print(f"    type: {event.type}")
+
+    def slash_command(self, name=None, description=None, options=None):
+        def dec(func):
+            cmd = SlashCommand(func, name=name, description=description, options=options)
+            self._commands.append(cmd)
+            return cmd
+        return dec
     
