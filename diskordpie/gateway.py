@@ -7,7 +7,6 @@ import logging
 from enum import IntEnum
 
 from . import http
-from .event import DiscordEvent
 
 
 __all__ = [ "Gateway", "ReconnectGateway", "GatewayDisconnected" ]
@@ -25,6 +24,16 @@ class GatewayDisconnected(Exception):
 
     def __init__(self, code=None):
         self.code = code
+
+
+class GatewayEvent:
+
+    def __init__(self, event_json) -> None:
+        if event_json["op"] != 0:
+            raise Exception("Can't create Event from non DISPATCH message.")
+
+        self.type = event_json["t"]
+        self.data = event_json["d"]
 
 
 class CloseCode(IntEnum):
@@ -123,6 +132,44 @@ class Gateway:
             await self.close()
             raise e
 
+    async def next_event(self) -> GatewayEvent:
+        while True:
+            data = await self._receive()
+            op = data["op"]
+
+            if op == OpCode.DISPATCH:
+                _logger.debug(f"Received event {data['t']}")
+                if data["t"] == "READY":
+                    # steal the session id for ourselves before handing the event over
+                    self._session_id = data["d"]["session_id"]
+                if data["t"] == "RESUMED":
+                    self.resuming = False
+                return GatewayEvent(data)
+            
+            if op == OpCode.HEARTBEAT:
+                _logger.debug("Request to send hearbeat received.")
+                self._send_heartbeat()
+            elif op == OpCode.RECONNECT:
+                # we should immediately reconnect and resume
+                _logger.warning("We were requested to reconnect.")
+                await self.close()
+                raise ReconnectGateway(resume=True)
+            elif op == OpCode.INVALID_SESSION:
+                if self.resuming:
+                    _logger.warning("Resuming failed. Sending identify instead.")
+                    await asyncio.sleep(random.uniform(1, 5))
+                    await self._identify(self._token)
+                else:
+                    _logger.warning(f"Received INVALID_SESSION. Should reconnect = {data['d']}")
+                    raise ReconnectGateway(resume=data["d"])
+            elif op == OpCode.HELLO:
+                _logger.warning("Unexpected HELLO message.")
+            elif op == OpCode.HEARTBEAT_ACK:
+                _logger.debug("Hearbeat acked.")
+                self._heartbeat_acked = True
+            else:
+                raise Exception(f"Gateway received unknown opcode {op}")
+
     async def _identify(self, token):
         _logger.info("Sending identify.")
         data = {
@@ -156,44 +203,6 @@ class Gateway:
         if data["shards"] > 1:
             _logger.warning("Discord is recomending to use more shards then one! Your bot might be too large.")
         return data["url"]
-
-    async def next_event(self):
-        while True:
-            data = await self._receive()
-            op = data["op"]
-
-            if op == OpCode.DISPATCH:
-                _logger.debug(f"Received event {data['t']}")
-                if data["t"] == "READY":
-                    # steal the session id for ourselves before handing the event over
-                    self._session_id = data["d"]["session_id"]
-                if data["t"] == "RESUMED":
-                    self.resuming = False
-                return DiscordEvent(data)
-            
-            if op == OpCode.HEARTBEAT:
-                _logger.debug("Request to send hearbeat received.")
-                self._send_heartbeat()
-            elif op == OpCode.RECONNECT:
-                # we should immediately reconnect and resume
-                _logger.warning("We were requested to reconnect.")
-                await self.close()
-                raise ReconnectGateway(resume=True)
-            elif op == OpCode.INVALID_SESSION:
-                if self.resuming:
-                    _logger.warning("Resuming failed. Sending identify instead.")
-                    await asyncio.sleep(random.uniform(1, 5))
-                    await self._identify(self._token)
-                else:
-                    _logger.warning(f"Received INVALID_SESSION. Should reconnect = {data['d']}")
-                    raise ReconnectGateway(resume=data["d"])
-            elif op == OpCode.HELLO:
-                _logger.warning("Unexpected HELLO message.")
-            elif op == OpCode.HEARTBEAT_ACK:
-                _logger.debug("Hearbeat acked.")
-                self._heartbeat_acked = True
-            else:
-                raise Exception(f"Gateway received unknown opcode {op}")
             
     async def _receive(self):
         msg = await self._ws.receive()

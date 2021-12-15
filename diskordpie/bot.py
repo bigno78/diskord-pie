@@ -4,8 +4,12 @@ import aiohttp
 import logging
 
 from .http import HttpClient
-from .gateway import CloseCode, GatewayDisconnected, Gateway, ReconnectGateway
-from .event import DiscordEvent
+from .gateway import (
+    GatewayDisconnected, 
+    Gateway, 
+    ReconnectGateway,
+    GatewayEvent,
+)
 from .commands import SlashCommand
 from .entities import User, Application
 
@@ -50,12 +54,12 @@ class Bot:
                 _logger.error(f"Gateway connection lost forever :(.")
                 break
 
-    async def _dispatch_event(self, event):
+    async def _dispatch_event(self, event: GatewayEvent):
         if event.type == "READY":
             _logger.info(f"Connected to gateway version {event.data['v']} as shard {event.data.get('shard')}")
             self._session_id = event.data["session_id"]
             self.user = User(**event.data["user"])
-            self.app = User(**event.data["application"])
+            self.app = Application(**event.data["application"])
             _logger.info(f"Bot user is {self.user.username}")
             _logger.info(f"App is {self.app.id}")
         elif event.type == "RESUMED":
