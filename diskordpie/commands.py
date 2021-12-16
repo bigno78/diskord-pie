@@ -56,6 +56,9 @@ class SlashCommand:
     }
 
     def __init__(self, func, *, name=None, description="placeholder", options=None) -> None:
+        if not inspect.iscoroutinefunction(func):
+            raise TypeError("Cannot make a command from non async function.")
+
         self._func = func
         self.name = name if name else func.__name__
         self.description = description
