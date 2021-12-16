@@ -85,7 +85,7 @@ class SlashCommand:
                 if annot == inspect.Parameter.empty:
                     raise Exception(f"Cannot deduce type for option {arg_name}")
                 if not annot in SlashCommand._type_map:
-                    raise Exception(f"Unknown type for option {arg}")
+                    raise Exception(f"Unknown type for option {arg_name}")
                 opt.type = SlashCommand._type_map[annot]
             
             if not opt.required:
