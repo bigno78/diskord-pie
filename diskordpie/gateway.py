@@ -102,13 +102,10 @@ class Gateway:
 
         try:
             gateway_url = await self._get_gateway_url(token)
+            gateway_url += "?v=9&encoding=json"
             
-            params = {
-                "v": 9,
-                "encoding": "json"
-            }
             _logger.debug("Connecting websocket to url: " + gateway_url)
-            self._ws = await self._session.ws_connect(gateway_url, params=params)
+            self._ws = await self._session.ws_connect(gateway_url)
 
             # receive hello message
             hello_msg = await self._receive()
