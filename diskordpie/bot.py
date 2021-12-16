@@ -10,8 +10,9 @@ from .gateway import (
     ReconnectGateway,
     GatewayEvent,
 )
-from .commands import SlashCommand
+from .commands import SlashCommand, Interaction
 from .entities import User, Application
+from .api import DiscordAPI
 
 __all__ = [ "Bot" ]
 
@@ -26,6 +27,7 @@ class Bot:
         self._http = None
         self._gateway = None
         self._commands = []
+        self._api = None
 
         self.user = None
         self.app = None
@@ -62,13 +64,40 @@ class Bot:
             self.app = Application(**event.data["application"])
             _logger.info(f"Bot user is {self.user.username}")
             _logger.info(f"App is {self.app.id}")
+
+            self._api = DiscordAPI(self._http, self.app)
+
+            for cmd in self._commands:
+                await self._api.create_slash_command(cmd)
+
         elif event.type == "RESUMED":
             print("Resuming finished.")
         elif event.type == "MESSAGE_CREATE":
-            print("Message: " + event.data["content"])            
+            print("Message: " + event.data["content"])  
+        elif event.type == "INTERACTION_CREATE":
+            _logger.info(f"Interaction received: {event.data['type']}")
+            interaction = Interaction(self._http, event.data)
+            for cmd in self._commands:
+                if cmd._id == interaction._cmd_id:
+                    await self.invoke_command(cmd, interaction)
         else:
-            print("Event received:")
-            print(f"    type: {event.type}")
+            print(f"Event received: {event.type}")
+            print(f"{event.data}")
+
+    async def invoke_command(self, cmd: SlashCommand, interaction: Interaction):
+        args = {}
+
+        for arg in interaction._args:
+            opt = None
+            for o in cmd.options:
+                if o.name == arg.name:
+                    opt = o
+                    break
+            if opt is None:
+                raise Exception("Unknown option in interaction.")
+            args[opt._arg_name] = arg.value
+        
+        await cmd.invoke(interaction, **args)
 
     def slash_command(self, name=None, description=None, options=None):
         def dec(func):

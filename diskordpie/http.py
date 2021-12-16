@@ -1,3 +1,4 @@
+import json
 import aiohttp
 import asyncio
 import time
@@ -231,9 +232,15 @@ class HttpClient:
 
                     # the request was ok
                     if 200 <= r.status and r.status < 300:
-                        return await r.json()
+                        if r.content_type == "application/json": 
+                            return await r.json()
+                        return None
                     
                     # TODO: possibly handle other status codes 
                     #       https://discord.com/developers/docs/topics/opcodes-and-status-codes
 
+                    if r.content_type == "application/json":
+                        data = await r.json()
+                        print(json.dumps(data, indent=4))
+                    
                     raise DiskordHttpError(r.status, r.reason)

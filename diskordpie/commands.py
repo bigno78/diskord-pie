@@ -1,9 +1,12 @@
-from enum import Enum
+from enum import IntEnum
 import inspect
+import json
+
+from .http import HttpClient
 
 __all__ = [ "OptionType", "Option", "SlashCommand" ]
 
-class OptionType(Enum):
+class OptionType(IntEnum):
     SUB_COMMAND = 1	
     SUB_COMMAND_GROUP = 2	
     STRING = 3	
@@ -21,9 +24,10 @@ class OptionType(Enum):
 class Option:
 
     def __init__(self, **kwargs) -> None:
+        self._id = None
         self.type = kwargs.get("type")
         self.name = kwargs.get("name")
-        self.description = kwargs.get("description", "")
+        self.description = kwargs.get("description", "placeholder")
         self.required = kwargs.get("required")
         self.choices = kwargs.get("choices")
         self.options = kwargs.get("options")
@@ -51,11 +55,11 @@ class SlashCommand:
         bool: OptionType.BOOLEAN,
     }
 
-    def __init__(self, func, *, name=None, description=None, options=None) -> None:
+    def __init__(self, func, *, name=None, description="placeholder", options=None) -> None:
         self._func = func
         self.name = name if name else func.__name__
         self.description = description
-        self.options = []
+        self.options: Option = []
 
         sig = inspect.signature(func)
 
@@ -94,3 +98,54 @@ class SlashCommand:
 
     async def __call__(self, interaction, **kwargs):
         await self.invoke(interaction, **kwargs)
+
+
+class InteractionArg:
+
+    def __init__(self, arg_json) -> None:
+        self.name = arg_json["name"]
+        self.type = arg_json["type"]
+
+        # optional fields
+        self.value = arg_json.get("value")
+        
+        # TODO: add rest of the fields later
+
+class Interaction:
+
+    def __init__(self, http: HttpClient, json_data) -> None:
+        self._http = http
+
+        self._id = json_data["id"]
+        self._app_id = json_data["application_id"]
+        self._token = json_data["token"]
+        self._type = json_data["type"]
+
+        # not in APPLICATION_COMMAND, MESSAGE_COMPONENT
+        if self._type not in [ 2, 3 ]:
+            raise Exception("Bad stuff!")
+
+        inter_data = json_data["data"]
+        
+        self._cmd_id = inter_data["id"]
+        self._cmd_name = inter_data["name"]
+        self._cmd_type = inter_data["type"]
+
+        self._args = []
+
+        for arg_json in inter_data.get("options", []):
+            self._args.append( InteractionArg(arg_json) )
+
+        self._version = json_data["version"]
+        
+    
+    async def respond(self, msg: str):
+        url = f"/interactions/{self._id}/{self._token}/callback"
+        payload = {
+            "type": 4, # CHANNEL_MESSAGE_WITH_SOURCE
+            "data": {
+                "content": msg,
+            }
+        }
+        r = await self._http.post(url, payload)
+        print(r)
