@@ -2,6 +2,7 @@ import asyncio
 import asyncio
 import aiohttp
 import logging
+import signal
 
 from .http import HttpClient
 from .gateway import (
@@ -28,14 +29,44 @@ class Bot:
         self._gateway = None
         self._commands = []
         self._api = None
+        self._main_task = None
 
         self.user = None
         self.app = None
 
     def run(self, token: str):
-        asyncio.run(self._run(token))
+        loop = asyncio.get_event_loop()
+
+        # make sure all resources are released when the bot is closed with ctrl-c
+        loop.add_signal_handler(signal.SIGINT, self._on_signal)
+        
+        try:
+            self._main_task = loop.create_task( self._run(token) )
+            loop.run_until_complete(self._main_task)
+        except asyncio.CancelledError:
+            _logger.info("Main task was cancelled.")
+        finally:
+            loop.close()
+
+    async def _shutdown(self):
+        _logger.info("Stopping the bot.")
+        if self._gateway:
+            await self._gateway.close()
+        if self._http_session:
+            await self._http_session.close()
+
+    def _on_signal(self):
+        _logger.info("Received a signal - cancelling the main task.")
+        if self._main_task:
+            self._main_task.cancel()
 
     async def _run(self, token: str):
+        try:
+            await self._main_loop(token)
+        finally:
+            await self._shutdown()
+
+    async def _main_loop(self, token: str):
         # apparently ClientSession has to be created in a coroutine 
         # so let's initialize everything here
         self._http_session = aiohttp.ClientSession()
