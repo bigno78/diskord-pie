@@ -3,6 +3,7 @@ import asyncio
 import sys
 import random
 import logging
+import time
 
 from enum import IntEnum
 
@@ -210,7 +211,7 @@ class Gateway:
                 self._seq = json_data["s"]
             return json_data
 
-        if msg.type == aiohttp.WSMsgType.CLOSE or msg.type == aiohttp.WSMsgType.CLOSED:
+        if msg.type in [ aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED, aiohttp.WSMsgType.CLOSING ]:
             code = self._ws.close_code
             _logger.info(f"WebSocket closed with code {code} {_close_code_str(code)} and data '{msg.data}'")
 
@@ -240,7 +241,7 @@ class Gateway:
 
     async def close(self):
         if self._ws and not self._ws.closed:
-                await self._ws.close()
+            await self._ws.close()
         if self._heartbeat_task:
             await self._end_heartbeat()
 
